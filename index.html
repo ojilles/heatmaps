@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+
+body {
+  font: 12px sans-serif;
+}
+
+h1 {
+  font-size: 36px;
+}
+
+.label {
+  font-weight: bold;
+}
+
+.tile {
+  shape-rendering: crispEdges;
+}
+
+.axis path,
+.axis line {
+  fill: none;
+  stroke: #000;
+  shape-rendering: crispEdges;
+}
+
+
+#explanation {
+  font-size: 18px;
+  width: 50%;
+}
+
+#ui-form {
+	background-color: #EEEEEE;
+	margin-top: 10px;
+	margin-bottom: 10px;
+	margin-left: 50px;
+	margin-right: 100px;
+	padding-top: 10px;
+	padding-bottom: 10px;
+	padding-left: 50px;
+	padding-right: 100px;
+}
+
+#displayText, #explanation {
+	margin-left: 50px;
+	padding-left: 50px;
+}
+
+</style>
+<title>Heatmaps</title>
+<body>
+<script src="http://d3js.org/d3.v2.js?2.9.6"></script>
+
+<h1>Key Pages Heatmap</h1>
+<a id="displayText" href="javascript:toggle();">Show Explanation</a>
+<div id="explanation" style="display: none;">
+	<ul>
+		<li>Explanation of the heatmap: on the X-axis is time (24 hours, usually, quantized in 5 min. increments), on the Y-axis is latency (how long did a particular request take to handle; quantized usually in 5ms or 1ms increments). The Z-axis is expressed in color (see right hand side for legend) and differs from graph to graph. Darker colors mean more requests handled on the intersection of that time of day and latency.</li>
+		<li>Please pay attention to the "% out of scope", it represents the number of <i>requests</i> that outside of your field of view (within your timeline though). In other words, these are the requests that took longer that your Y-axis allows for.</li>
+		<li>Idea's? Code is here, pull requests are welcome: <a href="https://github.com/ojilles/heatmaps">https://github.com/ojilles/heatmaps</a></li>
+	</ul>
+</div>
+<div id="ui-form">
+	<form method="get" action="">
+		Page:
+		<select id="pagetypeselector" name="pagetypeselector" onchange="this.form.submit()"></select>
+		Date:
+		<select id="dateselector" name="dateselector" onchange="this.form.submit()"></select>
+		Max. latency:
+		<select id="latencymaxselector" name="latencymaxselector" onchange="this.form.submit()"></select>
+		<INPUT type="submit" value="Send">
+	</form>
+</div>
+<script>
+
+function setOptions(selectname, value) {
+        console.log("selecting option "+selectname+" to value "+value);
+	var selector = document.getElementById(selectname);
+	for (var i = 0; i < selector.options.length; i++) {
+	    if (selector.options[i].value === value) {
+		selector.selectedIndex = i;
+		break;
+	    }
+	}
+}
+
+function toggle() {
+	var ele = document.getElementById("explanation");
+	var text = document.getElementById("displayText");
+	if(ele.style.display == "block") {
+    		ele.style.display = "none";
+		text.innerHTML = "Show Explanation";
+  	}
+	else {
+		ele.style.display = "block";
+		text.innerHTML = "Hide Explanation";
+	}
+} 
+
+// Grab date if one is present
+var latencyDefault = 10000; var latencyStep = 500;
+var requestDate = getParameterByName("dateselector");
+var requestPage = getParameterByName("pagetypeselector");
+var latencyMax= +getParameterByName("latencymaxselector");
+if(requestPage == "") { requestPage = "SRP"; }
+if(latencyMax < 1) {latencyMax = latencyDefault; }
+
+d3.csv("datadir/days.csv", function(days) {
+	var availableDays = [];
+	var pickedDay = 0;
+	var latencyChoices = d3.range(latencyDefault / latencyStep).map(function(d) { return (d+1) * latencyStep});
+
+	// Pull csv data out into just an array of date values (unix timestamps)
+	days.forEach(function(d) {
+		availableDays.push(+d.Days);
+	});
+
+	// Pick either user input or the last day available otherwise
+	// if no requestDate was filled, pick max(days)
+	if(+requestDate < 1) {
+		pickedDay = getMaxOfArray(availableDays);
+	} else {
+		pickedDay = requestDate;
+	}
+	console.log("Available days: "+availableDays+". Requested day:"+requestDate+". Picked day:"+pickedDay+" Max Latency: "+latencyMax+" ms.");
+
+	// render all available days
+	var datelistformat = d3.time.format("%A %x");
+	var table = d3.select("#daterange").append("ul");
+	d3.select("#dateselector")
+		.selectAll("option")
+			.data(availableDays)
+		.enter().append("option")
+			.attr("value", function(d){ return d;})
+			.text(function(d){ return datelistformat(new Date(d*1000));});
+	setOptions("dateselector", pickedDay);
+
+	// Set latency options in UI
+	latencyformat = d3.format(".3s");
+	d3.select("#latencymaxselector")
+		.selectAll("option")
+			.attr("name", "latencymaxselector")
+			.data(latencyChoices)
+		.enter().append("option")
+			.attr("value", function(d){ return +d;})
+			.text(function(d){ return latencyformat(d) + " ms";});
+	setOptions("latencymaxselector", latencyMax+"");
+
+	/* Read out CSV with all present pages, then render each of them */
+	d3.csv("datadir/pages.csv", function(pages) {
+
+		/* Populate a dropdown with available page names */	
+		var pagenames = pages.map(function(d) { return d.Pagetype; });
+		d3.select("#pagetypeselector")
+		      .selectAll("option")
+			.attr("name", "pagetypeselector")
+			.data(pagenames)
+		      .enter().append("option")
+			.attr("value", function(d){ return d;})
+			.text(function(d){ return d;});
+	
+		setOptions("pagetypeselector", requestPage);
+
+		console.log("Generating page: "+requestPage+" for date: "+pickedDay);
+		d3.csv("datadir/"+pickedDay+"/"+requestPage+".csv", function(buckets) {
+		  renderHeatmap(buckets, requestPage, pickedDay, latencyMax);
+		});
+	});
+});
+
+function renderHeatmap(buckets, pagename, requestDate, latencyMax) {
+	var sizescale = 800;
+	var maxLatency = latencyMax;
+	var margin = {top: 20, right: 90, bottom: 30, left: 100},
+	    width = 2*sizescale - margin.left - margin.right,
+	    height = 0.5*sizescale - margin.top - margin.bottom;
+
+	var parseDate = d3.time.format("%Y-%m-%d").parse,
+	    formatDate = d3.time.format("%X"); // https://github.com/mbostock/d3/wiki/Time-Formatting
+
+	var x = d3.time.scale().range([0, width]),
+	    y = d3.scale.linear().range([height, 0]),
+	    //z = d3.scale.linear().range(["white", "red"]);
+	    z = d3.scale.linear().range(["#FDFCEE", "#FF6540", "#611824", "#504375"]);
+
+	// The size of the buckets in the CSV data file.
+	// This could be inferred from the data if it weren't sparse.
+	var xStep = 300000,
+	    yStep = 100;
+
+	/* var xStep = 864e5,
+	    yStep = 100; */
+	var svg = d3.select("body").append("svg")
+	    .attr("width", width + margin.left + margin.right)
+	    .attr("height", height + margin.top + margin.bottom)
+	    .attr("id", pagename)
+	  .append("g")
+	    .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+
+	  // Coerce the CSV data to the appropriate types.
+	  reqformat = d3.format(".3s");
+	  var totalRequests = 0; var totalBuckets = 0; discards = 0; outOfScopeReq = 0;
+	  buckets.forEach(function(d) {
+	    tmp = d.date;
+	    d.date = new Date(d.date * 1000); 
+	    d.bucket = +d.bucket;
+	    d.count = +d.count;
+	    totalRequests = totalRequests + d.count;
+	    totalBuckets = totalBuckets + 1;
+	    if ((d.bucket < 0) || (d.count < 0)) {
+	    	// Show discarded data: console.log(d.date+" "+tmp+" "+d.bucket+" "+d.count);
+		discards += 1;
+		d.bucket = 0;
+	    }
+	    d.bucket = (d.bucket > maxLatency ) ? maxLatency : d.bucket;
+
+	    if ((d.bucket == 10000) || (d.bucket == maxLatency)) {
+		outOfScopeReq += d.count;
+		d.count = 0;
+	    }
+	  }); 
+	  console.log("Total requests for "+pagename+": "+totalRequests+ 
+          	" ("+reqformat(totalRequests)+") spread over "+totalBuckets+
+		" buckets (lines in source CSV file). Discarded: "+discards+" or "+
+		latencyformat((discards/totalBuckets)*100) +"%");
+	  console.log((latencyformat( (outOfScopeReq/totalRequests)*100 )) + "% of requests are out of scope (above the graph)");
+
+
+	  // Compute the scale domains.
+	  x.domain(d3.extent(buckets, function(d) { return d.date; }));
+	  y.domain(d3.extent(buckets, function(d) { return +d.bucket; }));
+	  z.domain([0, 
+		(d3.max(buckets, function(d) { return d.count; })/10)*3, 
+		(d3.max(buckets, function(d) { return d.count; })/10)*7, 
+		d3.max(buckets, function(d) { return d.count; })]); // Z broken in four ranges
+
+	console.log(d3.extent(buckets, function(d) { return d.bucket; }));
+
+	  // Extend the x- and y-domain to fit the last bucket.
+	  // For example, the y-bucket 3200 corresponds to values [3200, 3300].
+	  x.domain([x.domain()[0], +x.domain()[1] + xStep]);
+	  y.domain([y.domain()[0], y.domain()[1] + yStep]);
+
+	var titleformat = d3.time.format("%c");
+	  // Display the tiles for each non-zero bucket.
+	  // See http://bl.ocks.org/3074470 for an alternative implementation.
+	  svg.selectAll(".tile")
+	      .data(buckets)
+	    .enter().append("rect")
+	      .attr("class", "tile")
+	      .attr("x", function(d) { return x(d.date); })
+	      .attr("y", function(d) { return y(d.bucket + yStep); })
+	      .attr("width", x(xStep) - x(0))
+	      .attr("height",  y(0) - y(yStep))
+	      .style("fill", function(d) { return z(d.count); })
+	      .append("svg:title").text(function(d) { return " "+d.bucket+"+ ms || "+d.count+" requests || Date: "+titleformat(d.date);})
+	  ;
+
+	  // Add a legend for the color values.
+	  var legend = svg.selectAll(".legend")
+	      .data(z.ticks(10).slice(1).reverse())
+	    .enter().append("g")
+	      .attr("class", "legend")
+	      .attr("transform", function(d, i) { return "translate(" + (width + 20) + "," + (20 + i * 20) + ")"; });
+
+	  legend.append("rect")
+	      .attr("width", 20)
+	      .attr("height", 20)
+	      .style("fill", z);
+
+	  legend.append("text")
+	      .attr("x", 26)
+	      .attr("y", 10)
+	      .attr("dy", ".35em")
+	      .text(function(d){ return reqformat(d); });
+
+	  svg.append("text")
+	      .attr("class", "label")
+	      .attr("x", width + 20)
+	      .attr("y", 10)
+	      .attr("dy", ".35em")
+	      .text("Count");
+
+	  // Add an x-axis with label.
+	  svg.append("g")
+	      .attr("class", "x axis")
+	      .attr("transform", "translate(0," + height + ")")
+	      .call(d3.svg.axis().scale(x).ticks(d3.time.hours).tickFormat(formatDate).orient("bottom"))
+	    .append("text")
+	      .attr("class", "label")
+	      .attr("x", width)
+	      .attr("y", -6)
+	      .attr("text-anchor", "end")
+	      .text("Date (UTC)");
+
+	  // Add a y-axis with label.
+	  svg.append("g")
+	      .attr("class", "y axis")
+	      .call(d3.svg.axis().scale(y).orient("left"))
+	    .append("text")
+	      .attr("class", "label")
+	      .attr("y", 6)
+	      .attr("dy", ".71em")
+	      .attr("text-anchor", "end")
+	      .attr("transform", "rotate(-90)")
+	      .text("Latency [ms]");
+
+	  // Add title to graph
+	  svg.append("text")
+		.attr("x", (width / 2))             
+		.attr("y", 0 + (margin.top * 2))
+		.attr("text-anchor", "middle")  
+		.style("font-size", "24px") 
+		.style("text-decoration", "bold")  
+		.text(pagename+" Latency Heatmap ");
+	  svg.append("text")
+		.attr("x", (width / 2))             
+		.attr("y", 0 + (margin.top * 3 ))
+		.attr("text-anchor", "middle")  
+		.style("font-size", "16px") 
+		.text(""+d3.extent(buckets, function(d) { return titleformat(d.date); })
+		      + " " + reqformat(totalRequests) + " requests total with "+latencyformat( (outOfScopeReq/totalRequests)*100)+"% out of scope");
+	};
+
+
+function getParameterByName(name) {
+    name = name.replace(/[\[]/, "\\[").replace(/[\]]/, "\\]");
+    var regex = new RegExp("[\\?&]" + name + "=([^&#\/]*)"),
+        results = regex.exec(location.search);
+    return results == null ? "" : decodeURIComponent(results[1].replace(/\+/g, " "));
+}
+
+function getMaxOfArray(numArray) {
+    return Math.max.apply(null, numArray);
+}
+
+
+</script>
